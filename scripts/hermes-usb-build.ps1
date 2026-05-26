@@ -1,7 +1,12 @@
 # ==============================================================================
-# HERMES PORTABLE USB BUILDER -- Bad Systems Syndicate / CRL
+# HERMES PORTABLE USB BUILDER -- Windows
+# Bad Systems Syndicate / CRL
 # NousResearch/hermes-agent v0.14.x | MIT License
-# Run ONCE from USB drive root on Windows with local admin + internet access.
+#
+# IMPORTANT: exFAT USBs do not support symlinks. This script installs Hermes
+# runtimes/venv on the HOST (%LOCALAPPDATA%\hermes-usb\) and keeps only DATA
+# (sessions, memory, skills, .env) on the USB. The launcher sets HERMES_HOME
+# to the host cache and HERMES_DATA to the USB on every invocation.
 #
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File .\hermes-usb-build.ps1
@@ -16,305 +21,304 @@ function Write-Fatal { param($msg) Write-Host "[XX] $msg"   -ForegroundColor Red
 
 # -- Paths --
 $USB_ROOT    = Split-Path -Parent $MyInvocation.MyCommand.Path
-$HERMES_HOME = "$USB_ROOT\hermes-portable"
-$HERMES_DATA = "$HERMES_HOME\data"
-$HERMES_REPO = "$HERMES_HOME\hermes-agent"
+$USB_DATA    = "$USB_ROOT\hermes-portable\data"
+# Runtimes on HOST (NTFS, supports symlinks/junctions)
+$HOST_HERMES = "$env:LOCALAPPDATA\hermes-usb"
 
 Write-Host ""
-Write-Host "  HERMES PORTABLE USB BUILDER"   -ForegroundColor Magenta
-Write-Host "  Bad Systems Syndicate / CRL"   -ForegroundColor Magenta
-Write-Host "  NousResearch hermes-agent v0.14.x" -ForegroundColor Magenta
-Write-Host "  --------------------------------" -ForegroundColor DarkGray
-Write-Host "  USB Root   : $USB_ROOT"
-Write-Host "  HERMES_HOME: $HERMES_HOME"
-Write-Host "  HERMES_DATA: $HERMES_DATA"
+Write-Host "  HERMES PORTABLE USB BUILDER (Windows)"  -ForegroundColor Magenta
+Write-Host "  Bad Systems Syndicate / CRL"             -ForegroundColor Magenta
+Write-Host "  NousResearch hermes-agent v0.14.x"       -ForegroundColor Magenta
+Write-Host "  --------------------------------"         -ForegroundColor DarkGray
+Write-Host "  USB Root    : $USB_ROOT"
+Write-Host "  USB Data    : $USB_DATA"
+Write-Host "  Host Cache  : $HOST_HERMES"
+Write-Host "  (exFAT-safe: runtimes on host, data on USB)"
 Write-Host ""
 
-$confirm = Read-Host "Proceed with installation? (yes/no)"
-if ($confirm -notin @("yes","y")) { Write-Warn "Aborted by user."; exit 0 }
+$confirm = Read-Host "Proceed? (yes/no)"
+if ($confirm -notin @("yes","y")) { Write-Warn "Aborted."; exit 0 }
 
-# -- Step 1: Directory structure --
-Write-Step "Creating directory structure on USB..."
-$dirs = @(
-    $HERMES_HOME,
-    $HERMES_DATA,
-    "$HERMES_DATA\sessions",
-    "$HERMES_DATA\memory",
-    "$HERMES_DATA\skills",
-    "$HERMES_HOME\logs"
-)
-foreach ($d in $dirs) {
+# -- Step 1: Create USB data dirs (no symlinks needed -- flat files only) ------
+Write-Step "Creating USB data directories..."
+foreach ($d in @(
+    "$USB_ROOT\hermes-portable",
+    $USB_DATA,
+    "$USB_DATA\sessions",
+    "$USB_DATA\memory",
+    "$USB_DATA\skills",
+    "$USB_ROOT\hermes-portable\logs"
+)) {
     if (-not (Test-Path $d)) {
         New-Item -ItemType Directory -Path $d -Force | Out-Null
         Write-OK "Created: $d"
     } else {
-        Write-Warn "Exists (skipped): $d"
+        Write-Warn "Exists: $d"
     }
 }
 
-# -- Step 2: Prerequisites --
+# -- Step 2: Create host runtime directory -------------------------------------
+Write-Step "Creating host runtime directory..."
+if (-not (Test-Path $HOST_HERMES)) {
+    New-Item -ItemType Directory -Path $HOST_HERMES -Force | Out-Null
+}
+Write-OK "Host dir ready: $HOST_HERMES"
+
+# -- Step 3: Prerequisites -----------------------------------------------------
 Write-Step "Checking prerequisites..."
 
 if ($PSVersionTable.PSVersion.Major -lt 5) {
-    Write-Fatal "PowerShell 5.1+ required. Current: $($PSVersionTable.PSVersion)"
+    Write-Fatal "PowerShell 5.1+ required."
 }
 Write-OK "PowerShell $($PSVersionTable.PSVersion)"
 
 try {
     $null = Invoke-WebRequest -Uri "https://raw.githubusercontent.com" -UseBasicParsing -TimeoutSec 10
-    Write-OK "Internet connectivity confirmed"
+    Write-OK "Internet OK"
 } catch {
-    Write-Fatal "No internet access. Cannot proceed -- installer downloads ~600MB."
+    Write-Fatal "No internet access."
 }
 
 $gitAvail = Get-Command git -ErrorAction SilentlyContinue
 if ($gitAvail) {
-    Write-OK "Git found: $(git --version)"
+    Write-OK "Git: $(git --version)"
 } else {
-    Write-Warn "Git not found -- official installer will download PortableGit (~50MB) automatically"
+    Write-Warn "Git not found -- installer will download PortableGit (~50MB)"
 }
 
 $policy = Get-ExecutionPolicy -Scope CurrentUser
 if ($policy -eq "Restricted") {
-    Write-Warn "Execution policy is Restricted. Setting to RemoteSigned for CurrentUser..."
     Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force
     Write-OK "ExecutionPolicy set to RemoteSigned"
 }
 
-# -- Step 3: Run official installer --
-Write-Step "Setting HERMES_HOME and running official Nous Research installer..."
+# -- Step 4: Run official installer with HOST as HERMES_HOME -------------------
+Write-Step "Running official installer (runtimes -> host at $HOST_HERMES)..."
+Write-Warn "Downloading ~600MB -- do not close this window."
 
-$env:HERMES_HOME = $HERMES_HOME
-$env:HERMES_DATA = $HERMES_DATA
-[System.Environment]::SetEnvironmentVariable("HERMES_HOME", $HERMES_HOME, "User")
-[System.Environment]::SetEnvironmentVariable("HERMES_DATA", $HERMES_DATA, "User")
-
-Write-OK "HERMES_HOME set to: $HERMES_HOME"
-Write-Warn "Starting official installer -- downloading ~600MB (Python, Node.js, runtimes)"
-Write-Warn "Do NOT close this window during installation."
+$env:HERMES_HOME = $HOST_HERMES
+$env:HERMES_DATA = $USB_DATA
+[System.Environment]::SetEnvironmentVariable("HERMES_HOME", $HOST_HERMES, "User")
+[System.Environment]::SetEnvironmentVariable("HERMES_DATA", $USB_DATA, "User")
 
 try {
-    $installerScript = (Invoke-WebRequest -Uri "https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1" -UseBasicParsing).Content
-    Invoke-Expression $installerScript
+    $script = (Invoke-WebRequest -Uri "https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1" -UseBasicParsing).Content
+    Invoke-Expression $script
 } catch {
     Write-Fatal "Official installer failed: $_"
 }
-Write-OK "Official installer completed."
+Write-OK "Installer complete. Hermes runtimes at: $HOST_HERMES"
 
-# -- Step 4: Verify binary --
-Write-Step "Verifying Hermes binary..."
+# -- Step 5: Junction from host data to USB data dir ---------------------------
+Write-Step "Creating junction: host data -> USB data..."
 
-$hermesPath = $null
-$candidates = @(
-    "$HERMES_REPO\venv\Scripts\hermes.exe",
-    "$HERMES_HOME\venv\Scripts\hermes.exe"
-)
-foreach ($c in $candidates) {
-    if (Test-Path $c) { $hermesPath = $c; break }
-}
-if (-not $hermesPath) {
-    $found = Get-ChildItem -Path $HERMES_HOME -Filter "hermes.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($found) { $hermesPath = $found.FullName }
+$hostDataLink = "$HOST_HERMES\data"
+
+if (Test-Path $hostDataLink) {
+    if ((Get-Item $hostDataLink).LinkType -eq "Junction") {
+        Remove-Item $hostDataLink -Force
+    } else {
+        Rename-Item $hostDataLink "${hostDataLink}.bak" -Force
+        Write-Warn "Backed up existing data dir to ${hostDataLink}.bak"
+    }
 }
 
-if ($hermesPath) {
-    Write-OK "Found binary: $hermesPath"
-} else {
-    Write-Warn "hermes.exe not found in expected locations -- run 'hermes doctor' after first launch."
-    $hermesPath = "hermes"
-}
+cmd /c "mklink /J `"$hostDataLink`" `"$USB_DATA`"" | Out-Null
+Write-OK "Junction created: $hostDataLink -> $USB_DATA"
 
-# -- Step 5: .env scaffold --
-Write-Step "Creating .env scaffold..."
-
-$envFile = "$HERMES_DATA\.env"
+# -- Step 6: .env scaffold -----------------------------------------------------
+Write-Step "Creating .env scaffold on USB..."
+$envFile = "$USB_DATA\.env"
 if (-not (Test-Path $envFile)) {
     $envContent = @'
 # ==============================================================================
 # HERMES PORTABLE -- API KEY CONFIGURATION
 # Bad Systems Syndicate / CRL
-# WARNING: Raw credentials stored here.
-#          ENCRYPT THIS DRIVE with VeraCrypt before event use.
+# WARNING: Encrypt this USB with VeraCrypt before event use.
 # ==============================================================================
 
-# -- Choose ONE primary provider (uncomment and fill in) ----------------------
+# -- Choose ONE primary provider (uncomment + fill in) ------------------------
 
-# Anthropic Claude (API key -- pay per token)
+# Anthropic Claude (pay per token)
 # ANTHROPIC_API_KEY=sk-ant-...
 
 # OpenRouter (200+ models, one key -- RECOMMENDED for ops)
 # OPENROUTER_API_KEY=sk-or-v1-...
 
-# DeepSeek (cheap, fast reasoning)
+# DeepSeek
 # DEEPSEEK_API_KEY=sk-...
 
-# Local Ollama endpoint (no API key needed)
+# Local Ollama (no key needed)
 # HERMES_ENDPOINT=http://localhost:11434/v1
 # HERMES_MODEL=llama3
 
 # -- Optional tools -----------------------------------------------------------
 # TELEGRAM_BOT_TOKEN=
 # DISCORD_BOT_TOKEN=
-# OPENWEATHER_API_KEY=
 
 # After editing, run: launch-windows.ps1 model
 '@
     [System.IO.File]::WriteAllText($envFile, $envContent, [System.Text.Encoding]::ASCII)
     Write-OK ".env scaffold created: $envFile"
 } else {
-    Write-Warn ".env already exists -- skipping (not overwriting your keys)"
+    Write-Warn ".env exists -- not overwriting"
 }
 
-# -- Step 6: launch-windows.ps1 --
+# -- Step 7: launch-windows.ps1 ------------------------------------------------
 Write-Step "Writing launch-windows.ps1..."
-
-$launchWinContent = @'
+$launchContent = @'
 # ==============================================================================
 # HERMES PORTABLE LAUNCHER -- Windows
+# Runtimes: %LOCALAPPDATA%\hermes-usb\ (host, NTFS)
+# Data:     <USB>\hermes-portable\data\ (USB, exFAT-safe)
 # Usage: powershell -ExecutionPolicy Bypass -File .\launch-windows.ps1 [args]
-# Examples:
-#   .\launch-windows.ps1
-#   .\launch-windows.ps1 model
-#   .\launch-windows.ps1 doctor
-#   .\launch-windows.ps1 chat
 # ==============================================================================
 param([Parameter(ValueFromRemainingArguments)][string[]]$HermesArgs)
 
 $DRIVE       = Split-Path -Parent $MyInvocation.MyCommand.Path
-$HERMES_HOME = "$DRIVE\hermes-portable"
-$HERMES_DATA = "$HERMES_HOME\data"
+$USB_DATA    = "$DRIVE\hermes-portable\data"
+$HOST_HERMES = "$env:LOCALAPPDATA\hermes-usb"
 
-$env:HERMES_HOME = $HERMES_HOME
-$env:HERMES_DATA = $HERMES_DATA
+if (-not (Test-Path $HOST_HERMES)) {
+    Write-Host "[XX] Host runtime not found: $HOST_HERMES" -ForegroundColor Red
+    Write-Host "[!!] Run hermes-usb-build.ps1 on this machine first." -ForegroundColor Yellow
+    exit 1
+}
+
+# Re-verify junction points to current USB path
+$junctionPath = "$HOST_HERMES\data"
+$currentTarget = if (Test-Path $junctionPath) { (Get-Item $junctionPath).Target } else { "" }
+if ($currentTarget -ne $USB_DATA) {
+    Write-Host "[!!] Re-linking data junction to USB..." -ForegroundColor Yellow
+    if (Test-Path $junctionPath) { Remove-Item $junctionPath -Force -Recurse }
+    cmd /c "mklink /J `"$junctionPath`" `"$USB_DATA`"" | Out-Null
+    Write-Host "[OK] Junction updated: $junctionPath -> $USB_DATA" -ForegroundColor Green
+}
+
+$env:HERMES_HOME = $HOST_HERMES
+$env:HERMES_DATA = $USB_DATA
 
 foreach ($p in @(
-    "$HERMES_HOME\hermes-agent\venv\Scripts",
-    "$HERMES_HOME\venv\Scripts",
-    "$HERMES_HOME\git\bin"
-)) {
-    if (Test-Path $p) { $env:PATH = "$p;$env:PATH" }
-}
+    "$HOST_HERMES\hermes-agent\venv\Scripts",
+    "$HOST_HERMES\venv\Scripts",
+    "$HOST_HERMES\git\bin"
+)) { if (Test-Path $p) { $env:PATH = "$p;$env:PATH" } }
 
-Write-Host "[BSS] Hermes portable | Drive: $DRIVE"    -ForegroundColor Cyan
-Write-Host "[BSS] HERMES_HOME    : $HERMES_HOME"      -ForegroundColor DarkCyan
-Write-Host "[BSS] HERMES_DATA    : $HERMES_DATA"      -ForegroundColor DarkCyan
+Write-Host "[BSS] Hermes portable"           -ForegroundColor Cyan
+Write-Host "[BSS] Runtimes : $HOST_HERMES"   -ForegroundColor DarkCyan
+Write-Host "[BSS] Data     : $USB_DATA"      -ForegroundColor DarkCyan
 Write-Host ""
 
-if ($HermesArgs.Count -gt 0) {
-    & hermes @HermesArgs
-} else {
-    & hermes
-}
+if ($HermesArgs.Count -gt 0) { & hermes @HermesArgs } else { & hermes }
 '@
-$launchWin = "$USB_ROOT\launch-windows.ps1"
-[System.IO.File]::WriteAllText($launchWin, $launchWinContent, [System.Text.Encoding]::ASCII)
-Write-OK "Created: $launchWin"
+[System.IO.File]::WriteAllText("$USB_ROOT\launch-windows.ps1", $launchContent, [System.Text.Encoding]::ASCII)
+Write-OK "Created: $USB_ROOT\launch-windows.ps1"
 
-# -- Step 7: launch-linux.sh --
+# -- Step 8: launch-linux.sh ---------------------------------------------------
 Write-Step "Writing launch-linux.sh..."
-
-$launchLinContent = "#!/usr/bin/env bash`n" +
-"# ==============================================================================`n" +
+$linuxContent = "#!/usr/bin/env bash`n" +
 "# HERMES PORTABLE LAUNCHER -- Linux`n" +
-"# Usage: ./launch-linux.sh [hermes args]`n" +
-"# ==============================================================================`n" +
+"# Runtimes: ~/.hermes-usb/ (host)  Data: <USB>/hermes-portable/data/ (USB)`n" +
 'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' + "`n" +
-'export HERMES_HOME="$SCRIPT_DIR/hermes-portable"' + "`n" +
-'export HERMES_DATA="$HERMES_HOME/data"' + "`n" +
-"`n" +
-'for venv in "$HERMES_HOME/hermes-agent/venv/bin" "$HERMES_HOME/venv/bin" "$HOME/.local/bin"; do' + "`n" +
-'    [ -d "$venv" ] && export PATH="$venv:$PATH"' + "`n" +
-"done`n" +
-"`n" +
-'echo "[BSS] Hermes portable | Drive: $SCRIPT_DIR"' + "`n" +
-'echo "[BSS] HERMES_HOME    : $HERMES_HOME"' + "`n" +
-'echo ""' + "`n" +
+'USB_DATA="$SCRIPT_DIR/hermes-portable/data"' + "`n" +
+'HOST_HERMES="$HOME/.hermes-usb"' + "`n" +
+'HOST_DATA_LINK="$HOST_HERMES/data"' + "`n" +
+'if [[ ! -d "$HOST_HERMES" ]]; then' + "`n" +
+'    echo "[XX] Host runtime not found. Run hermes-usb-build.sh on this machine first."' + "`n" +
+'    exit 1' + "`n" +
+'fi' + "`n" +
+'if [[ ! -L "$HOST_DATA_LINK" ]] || [[ "$(readlink "$HOST_DATA_LINK")" != "$USB_DATA" ]]; then' + "`n" +
+'    echo "[!!] Re-linking data dir to USB..."' + "`n" +
+'    [[ -d "$HOST_DATA_LINK" && ! -L "$HOST_DATA_LINK" ]] && mv "$HOST_DATA_LINK" "${HOST_DATA_LINK}.bak.$(date +%s)"' + "`n" +
+'    ln -sfn "$USB_DATA" "$HOST_DATA_LINK"' + "`n" +
+'fi' + "`n" +
+'export HERMES_HOME="$HOST_HERMES"' + "`n" +
+'export HERMES_DATA="$USB_DATA"' + "`n" +
+'for venv in "$HOST_HERMES/hermes-agent/venv/bin" "$HOST_HERMES/venv/bin" "$HOME/.local/bin"; do' + "`n" +
+'    [[ -d "$venv" ]] && export PATH="$venv:$PATH"' + "`n" +
+'done' + "`n" +
+'echo "[BSS] Runtimes: $HOST_HERMES | Data: $USB_DATA"' + "`n" +
 'exec hermes "$@"' + "`n"
 
-$launchLin = "$USB_ROOT\launch-linux.sh"
-# Write with LF line endings only
-$launchLinContent = $launchLinContent -replace "`r`n", "`n"
-[System.IO.File]::WriteAllText($launchLin, $launchLinContent, [System.Text.Encoding]::ASCII)
-Write-OK "Created: $launchLin (LF line endings)"
+$linuxContent = $linuxContent -replace "`r`n", "`n"
+[System.IO.File]::WriteAllText("$USB_ROOT\launch-linux.sh", $linuxContent, [System.Text.Encoding]::ASCII)
+Write-OK "Created: $USB_ROOT\launch-linux.sh (LF line endings)"
 
-# -- Step 8: README --
-Write-Step "Writing README.txt..."
-
-$buildDate = Get-Date -Format "yyyy-MM-dd HH:mm"
-$readmeContent = @"
-HERMES PORTABLE -- BAD SYSTEMS SYNDICATE / CRL
-NousResearch hermes-agent | MIT License
-Built: $buildDate
-USB Root: $USB_ROOT
+# -- Step 9: BOOTSTRAP-NEW-MACHINE.txt -----------------------------------------
+Write-Step "Writing BOOTSTRAP-NEW-MACHINE.txt..."
+$bootstrapContent = @"
+HERMES PORTABLE -- NEW MACHINE SETUP
+Bad Systems Syndicate / CRL
 ================================================
 
-FIRST-TIME SETUP:
-1. Edit hermes-portable\data\.env -- add your API key(s)
-2. Open new PowerShell window
-3. powershell -ExecutionPolicy Bypass -File launch-windows.ps1 model
-4. powershell -ExecutionPolicy Bypass -File launch-windows.ps1 doctor
-5. powershell -ExecutionPolicy Bypass -File launch-windows.ps1
+IMPORTANT: exFAT USB does not support symlinks.
+Hermes runtimes install to the HOST machine each time.
+Your DATA (sessions, memory, keys) stays on the USB.
 
-WINDOWS (subsequent use):
+ON A NEW WINDOWS MACHINE:
+  1. Plug in USB
+  2. powershell -ExecutionPolicy Bypass -File <drive>:\hermes-usb-build.ps1
+     (installs runtimes to %LOCALAPPDATA%\hermes-usb\, ~600MB, once per machine)
+  3. powershell -ExecutionPolicy Bypass -File <drive>:\launch-windows.ps1
+
+ON A NEW LINUX MACHINE:
+  1. Plug in USB, cd to mount point
+  2. chmod +x hermes-usb-build.sh && ./hermes-usb-build.sh
+     (installs runtimes to ~/.hermes-usb/, ~600MB, once per machine)
+  3. ./launch-linux.sh
+
+YOUR DATA IS ALWAYS ON THE USB:
+  hermes-portable\data\.env       -- API keys
+  hermes-portable\data\sessions\  -- conversation history
+  hermes-portable\data\memory\    -- agent memory
+  hermes-portable\data\skills\    -- custom skills
+
+OPSEC: Encrypt this USB with VeraCrypt before event use.
+"@
+[System.IO.File]::WriteAllText("$USB_ROOT\BOOTSTRAP-NEW-MACHINE.txt", $bootstrapContent, [System.Text.Encoding]::ASCII)
+Write-OK "Created: BOOTSTRAP-NEW-MACHINE.txt"
+
+# -- Step 10: README -----------------------------------------------------------
+$buildDate = Get-Date -Format "yyyy-MM-dd HH:mm"
+[System.IO.File]::WriteAllText("$USB_ROOT\README.txt", @"
+HERMES PORTABLE -- BAD SYSTEMS SYNDICATE / CRL
+Built: $buildDate on $env:COMPUTERNAME
+================================================
+DAILY USE:
   powershell -ExecutionPolicy Bypass -File launch-windows.ps1
   powershell -ExecutionPolicy Bypass -File launch-windows.ps1 model
   powershell -ExecutionPolicy Bypass -File launch-windows.ps1 doctor
-  powershell -ExecutionPolicy Bypass -File launch-windows.ps1 chat
 
-LINUX (plug in USB, then):
-  chmod +x launch-linux.sh
-  ./launch-linux.sh
-  ./launch-linux.sh model
+NEW MACHINE: See BOOTSTRAP-NEW-MACHINE.txt
+OPSEC: Encrypt with VeraCrypt. Docs: https://hermes-agent.nousresearch.com/docs
+"@, [System.Text.Encoding]::ASCII)
+Write-OK "Created: README.txt"
 
-OPSEC:
-  hermes-portable\data\.env     -- raw API keys
-  hermes-portable\data\sessions -- full chat history
-  ENCRYPT THIS DRIVE with VeraCrypt before event use.
-  Do NOT store production keys on unencrypted portable drives.
-
-HERMES COMMANDS:
-  hermes           -- interactive chat (TUI)
-  hermes model     -- configure LLM provider
-  hermes doctor    -- diagnose install issues
-  hermes tools     -- configure enabled tools
-  hermes gateway   -- setup Telegram/Discord/Slack
-  hermes config    -- view/set config values
-  hermes update    -- update to latest version
-
-DOCS:
-  https://hermes-agent.nousresearch.com/docs
-  https://github.com/NousResearch/hermes-agent
-  Discord: https://discord.gg/NousResearch
-"@
-[System.IO.File]::WriteAllText("$USB_ROOT\README.txt", $readmeContent, [System.Text.Encoding]::ASCII)
-Write-OK "Created: $USB_ROOT\README.txt"
-
-# -- Step 9: Health check --
-Write-Step "Running post-install health check..."
-
+# -- Step 11: Health check -----------------------------------------------------
+Write-Step "Health check..."
 $refreshedPath = [System.Environment]::GetEnvironmentVariable("PATH", "User")
 $env:PATH = "$refreshedPath;$env:PATH"
-
 try {
     $v = & hermes --version 2>&1
-    Write-OK "hermes --version: $v"
+    Write-OK "hermes: $v"
 } catch {
-    Write-Warn "hermes not yet in PATH for this shell -- open a new PowerShell window and use launch-windows.ps1"
+    Write-Warn "hermes not in PATH yet -- open new PowerShell and use launch-windows.ps1"
 }
 
-# -- Done --
 Write-Host ""
 Write-Host "================================================" -ForegroundColor Green
 Write-Host "  BUILD COMPLETE" -ForegroundColor Green
 Write-Host "================================================" -ForegroundColor Green
+Write-Host "  Runtimes : $HOST_HERMES"
+Write-Host "  Data     : $USB_DATA"
 Write-Host ""
 Write-Host "  NEXT STEPS:"
-Write-Host "  1. Edit hermes-portable\data\.env -- add your API key"
-Write-Host "  2. Open a NEW PowerShell window"
+Write-Host "  1. Edit hermes-portable\data\.env -- add API key"
+Write-Host "  2. Open NEW PowerShell window"
 Write-Host "  3. powershell -ExecutionPolicy Bypass -File launch-windows.ps1 model"
 Write-Host "  4. powershell -ExecutionPolicy Bypass -File launch-windows.ps1 doctor"
 Write-Host "  5. powershell -ExecutionPolicy Bypass -File launch-windows.ps1"
 Write-Host ""
-Write-Host "  OPSEC: Encrypt drive with VeraCrypt before field use." -ForegroundColor Yellow
-Write-Host "  Docs : https://hermes-agent.nousresearch.com/docs"
+Write-Host "  NEW MACHINE: run hermes-usb-build.ps1 on it first" -ForegroundColor Yellow
+Write-Host "  OPSEC: Encrypt USB with VeraCrypt before events"    -ForegroundColor Yellow
 Write-Host ""
