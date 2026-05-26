@@ -1,289 +1,324 @@
 #!/usr/bin/env bash
-# =============================================================================
-# HERMES PORTABLE USB BUILDER — Linux companion
+# ==============================================================================
+# HERMES PORTABLE USB BUILDER -- Linux
 # Bad Systems Syndicate / CRL
-# Run ONCE from the USB mount point on a Linux machine with internet access.
+# NousResearch/hermes-agent v0.14.x | MIT License
+#
+# IMPORTANT: exFAT USBs do not support symlinks. This script installs Hermes
+# runtimes/venv on the HOST (under ~/.hermes-usb/) and keeps only DATA
+# (sessions, memory, skills, .env) on the USB. The launcher sets HERMES_HOME
+# to the host cache and HERMES_DATA to the USB on every invocation.
 #
 # Usage:
 #   chmod +x hermes-usb-build.sh
 #   ./hermes-usb-build.sh
-#
-# Requires: bash, curl, git (installer handles Python/Node)
-# =============================================================================
+# ==============================================================================
 
 set -euo pipefail
 
-# ── Color helpers ─────────────────────────────────────────────────────────────
 CYAN='\033[0;36m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
 step()  { echo -e "\n${CYAN}[>>] $*${NC}"; }
 ok()    { echo -e "${GREEN}[OK] $*${NC}"; }
 warn()  { echo -e "${YELLOW}[!!] $*${NC}"; }
 fatal() { echo -e "${RED}[XX] $*${NC}"; exit 1; }
 
-# ── Paths ─────────────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HERMES_HOME="$SCRIPT_DIR/hermes-portable"
-HERMES_DATA="$HERMES_HOME/data"
+
+# -- Paths --
+# DATA stays on the USB (no symlinks needed -- only flat files/dirs)
+USB_DATA="$SCRIPT_DIR/hermes-portable/data"
+# RUNTIME lives on the HOST (supports symlinks, native FS)
+HOST_HERMES="$HOME/.hermes-usb"
+HOST_DATA_LINK="$HOST_HERMES/data"   # symlink on host pointing to USB data
 
 echo -e "${CYAN}
-  ██████╗ ███████╗███████╗
-  ██╔══██╗██╔════╝██╔════╝
-  ██████╔╝███████╗███████╗
-  ██╔══██╗╚════██║╚════██║
-  ██████╔╝███████║███████║
-  ╚═════╝ ╚══════╝╚══════╝
   HERMES PORTABLE USB BUILDER (Linux)
   Bad Systems Syndicate / CRL
   NousResearch hermes-agent v0.14.x
-  ──────────────────────────────────
+  ----------------------------------
   USB Root   : $SCRIPT_DIR
-  HERMES_HOME: $HERMES_HOME
-  HERMES_DATA: $HERMES_DATA
+  USB Data   : $USB_DATA
+  Host Cache : $HOST_HERMES
+  (exFAT-safe: runtimes on host, data on USB)
 ${NC}"
 
-read -rp "Proceed with installation? (yes/no): " confirm
+read -rp "Proceed? (yes/no): " confirm
 [[ "$confirm" =~ ^(yes|y)$ ]] || { warn "Aborted."; exit 0; }
 
-# ── Step 1: Directory structure ───────────────────────────────────────────────
-step "Creating directory structure..."
-for d in "$HERMES_HOME" "$HERMES_DATA" "$HERMES_DATA/sessions" "$HERMES_DATA/memory" "$HERMES_DATA/skills" "$HERMES_HOME/logs"; do
-    mkdir -p "$d"
-    ok "Ensured: $d"
-done
+# -- Step 1: Create USB data directories (no symlinks, flat files only) --------
+step "Creating USB data directories..."
+mkdir -p "$USB_DATA/sessions"
+mkdir -p "$USB_DATA/memory"
+mkdir -p "$USB_DATA/skills"
+mkdir -p "$SCRIPT_DIR/hermes-portable/logs"
+ok "USB data dirs ready"
 
-# ── Step 2: Check prerequisites ───────────────────────────────────────────────
+# -- Step 2: Create host runtime directory -------------------------------------
+step "Creating host runtime directory at $HOST_HERMES..."
+mkdir -p "$HOST_HERMES"
+ok "Host dir ready: $HOST_HERMES"
+
+# -- Step 3: Prerequisites -----------------------------------------------------
 step "Checking prerequisites..."
 
-command -v curl  &>/dev/null || fatal "curl not found. Install it: sudo apt install curl"
-command -v bash  &>/dev/null || fatal "bash not found."
+command -v curl &>/dev/null || fatal "curl not found. Install: sudo apt install curl"
 
 if command -v git &>/dev/null; then
     ok "Git: $(git --version)"
 else
-    warn "Git not found — installer will attempt to install it."
+    warn "Git not found -- attempting install..."
     if command -v apt-get &>/dev/null; then
-        sudo apt-get install -y git && ok "git installed via apt"
+        sudo apt-get install -y git && ok "git installed"
     elif command -v pacman &>/dev/null; then
-        sudo pacman -Sy --noconfirm git && ok "git installed via pacman"
+        sudo pacman -Sy --noconfirm git && ok "git installed"
     elif command -v dnf &>/dev/null; then
-        sudo dnf install -y git && ok "git installed via dnf"
+        sudo dnf install -y git && ok "git installed"
     else
-        fatal "Cannot install git automatically. Install manually and re-run."
+        fatal "Cannot auto-install git. Install manually and re-run."
     fi
 fi
 
-# Internet check
-curl -fsSL --max-time 10 https://raw.githubusercontent.com &>/dev/null && ok "Internet connectivity confirmed" \
-    || fatal "No internet access. Cannot proceed."
+curl -fsSL --max-time 10 https://raw.githubusercontent.com &>/dev/null \
+    && ok "Internet OK" \
+    || fatal "No internet access."
 
-# ── Step 3: Export HERMES_HOME and run official installer ────────────────────
-step "Setting HERMES_HOME and running official Nous Research installer..."
+# -- Step 4: Run official installer with HOST as HERMES_HOME -------------------
+step "Running official Nous Research installer (runtimes -> host)..."
+warn "HERMES_HOME set to HOST: $HOST_HERMES"
+warn "This avoids the exFAT symlink limitation."
+warn "Downloading ~600MB -- do not close terminal."
 
-export HERMES_HOME
-export HERMES_DATA
-
-warn "Starting official installer (~600MB download: Python, Node.js, runtimes)"
-warn "Do NOT close this terminal during installation."
+export HERMES_HOME="$HOST_HERMES"
+export HERMES_DATA="$USB_DATA"
 
 curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash \
     || fatal "Official installer failed."
 
-ok "Official installer completed."
+ok "Installer complete. Hermes runtimes at: $HOST_HERMES"
 
-# ── Step 4: Verify binary ────────────────────────────────────────────────────
-step "Verifying Hermes binary..."
+# -- Step 5: Link host data dir to USB data dir --------------------------------
+step "Linking host data pointer to USB data dir..."
 
-HERMES_BIN=""
-for candidate in \
-    "$HERMES_HOME/hermes-agent/venv/bin/hermes" \
-    "$HERMES_HOME/venv/bin/hermes" \
-    "$HOME/.local/bin/hermes"; do
-    if [[ -x "$candidate" ]]; then
-        HERMES_BIN="$candidate"
-        ok "Found binary: $HERMES_BIN"
-        break
-    fi
-done
+# Remove any data dir the installer may have created on the host
+if [[ -d "$HOST_DATA_LINK" && ! -L "$HOST_DATA_LINK" ]]; then
+    warn "Backing up host data dir created by installer: ${HOST_DATA_LINK}.bak"
+    mv "$HOST_DATA_LINK" "${HOST_DATA_LINK}.bak"
+fi
 
-[[ -z "$HERMES_BIN" ]] && warn "hermes binary not found in expected locations — run 'hermes doctor' after launching."
+# Create symlink on host FS pointing to USB data (symlink itself lives on ext4)
+ln -sfn "$USB_DATA" "$HOST_DATA_LINK"
+ok "Linked: $HOST_DATA_LINK -> $USB_DATA"
 
-# ── Step 5: Create .env scaffold ─────────────────────────────────────────────
-step "Creating .env scaffold..."
-
-ENV_FILE="$HERMES_DATA/.env"
+# -- Step 6: .env scaffold -----------------------------------------------------
+step "Creating .env scaffold on USB..."
+ENV_FILE="$USB_DATA/.env"
 if [[ ! -f "$ENV_FILE" ]]; then
     cat > "$ENV_FILE" << 'ENVEOF'
-# ─────────────────────────────────────────────────────────────────────────────
-# HERMES PORTABLE — API KEY CONFIGURATION
+# ==============================================================================
+# HERMES PORTABLE -- API KEY CONFIGURATION
 # Bad Systems Syndicate / CRL
-# WARNING: This file contains sensitive credentials.
-#          ENCRYPT THIS DRIVE with VeraCrypt before use at events.
-# ─────────────────────────────────────────────────────────────────────────────
+# WARNING: Encrypt this USB with VeraCrypt before event use.
+# ==============================================================================
 
-# ── Choose ONE primary provider (uncomment and fill in) ──────────────────────
+# -- Choose ONE primary provider (uncomment + fill in) ------------------------
 
-# Anthropic Claude (API key — pay per token)
+# Anthropic Claude (API key -- pay per token)
 # ANTHROPIC_API_KEY=sk-ant-...
 
-# OpenRouter (200+ models, one key — RECOMMENDED for ops)
+# OpenRouter (200+ models, one key -- RECOMMENDED for ops)
 # OPENROUTER_API_KEY=sk-or-v1-...
 
-# DeepSeek (cheap, fast reasoning)
+# DeepSeek
 # DEEPSEEK_API_KEY=sk-...
 
-# Local Ollama endpoint (no API key needed)
+# Local Ollama (no key needed)
 # HERMES_ENDPOINT=http://localhost:11434/v1
 # HERMES_MODEL=llama3
 
-# ── Optional tools ────────────────────────────────────────────────────────────
+# -- Optional tools -----------------------------------------------------------
 # TELEGRAM_BOT_TOKEN=
 # DISCORD_BOT_TOKEN=
-# OPENWEATHER_API_KEY=
 
-# ─────────────────────────────────────────────────────────────────────────────
 # After editing, run: ./launch-linux.sh model
-# ─────────────────────────────────────────────────────────────────────────────
 ENVEOF
     chmod 600 "$ENV_FILE"
-    ok ".env scaffold created (chmod 600): $ENV_FILE"
+    ok ".env scaffold created (chmod 600)"
 else
-    warn ".env already exists — skipping (not overwriting your keys)"
+    warn ".env exists -- not overwriting"
 fi
 
-# ── Step 6: Write launch-linux.sh ────────────────────────────────────────────
+# -- Step 7: Write launch-linux.sh to USB root ---------------------------------
 step "Writing launch-linux.sh..."
-
 LAUNCH="$SCRIPT_DIR/launch-linux.sh"
 cat > "$LAUNCH" << 'LAUNCHEOF'
 #!/usr/bin/env bash
-# =============================================================================
-# HERMES PORTABLE LAUNCHER — Linux
+# ==============================================================================
+# HERMES PORTABLE LAUNCHER -- Linux
+# Runtimes: ~/.hermes-usb/ (host, supports symlinks)
+# Data:      <USB>/hermes-portable/data/ (USB, exFAT-safe)
 # Usage: ./launch-linux.sh [hermes args]
-# =============================================================================
+# ==============================================================================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export HERMES_HOME="$SCRIPT_DIR/hermes-portable"
-export HERMES_DATA="$HERMES_HOME/data"
+USB_DATA="$SCRIPT_DIR/hermes-portable/data"
+HOST_HERMES="$HOME/.hermes-usb"
+HOST_DATA_LINK="$HOST_HERMES/data"
 
+# -- Verify host install exists ------------------------------------------------
+if [[ ! -d "$HOST_HERMES" ]]; then
+    echo -e "\033[0;31m[XX] Host runtime not found: $HOST_HERMES\033[0m"
+    echo -e "\033[1;33m[!!] Run hermes-usb-build.sh on this machine first.\033[0m"
+    exit 1
+fi
+
+# -- Re-link data dir to USB (in case USB was replugged or path changed) -------
+if [[ ! -L "$HOST_DATA_LINK" ]] || [[ "$(readlink "$HOST_DATA_LINK")" != "$USB_DATA" ]]; then
+    echo -e "\033[1;33m[!!] Re-linking data dir to USB...\033[0m"
+    [[ -d "$HOST_DATA_LINK" && ! -L "$HOST_DATA_LINK" ]] && mv "$HOST_DATA_LINK" "${HOST_DATA_LINK}.bak.$(date +%s)"
+    ln -sfn "$USB_DATA" "$HOST_DATA_LINK"
+    echo -e "\033[0;32m[OK] Linked: $HOST_DATA_LINK -> $USB_DATA\033[0m"
+fi
+
+# -- Set env -------------------------------------------------------------------
+export HERMES_HOME="$HOST_HERMES"
+export HERMES_DATA="$USB_DATA"
+
+# Add venv to PATH
 for venv in \
-    "$HERMES_HOME/hermes-agent/venv/bin" \
-    "$HERMES_HOME/venv/bin" \
+    "$HOST_HERMES/hermes-agent/venv/bin" \
+    "$HOST_HERMES/venv/bin" \
     "$HOME/.local/bin"; do
     [[ -d "$venv" ]] && export PATH="$venv:$PATH"
 done
 
-echo -e "\033[0;36m[BSS] Hermes portable | Drive: $SCRIPT_DIR\033[0m"
-echo -e "\033[0;36m[BSS] HERMES_HOME: $HERMES_HOME\033[0m"
+echo -e "\033[0;36m[BSS] Hermes portable\033[0m"
+echo -e "\033[0;36m[BSS] Runtimes : $HOST_HERMES\033[0m"
+echo -e "\033[0;36m[BSS] Data     : $USB_DATA\033[0m"
+echo ""
 
 exec hermes "$@"
 LAUNCHEOF
-
 chmod +x "$LAUNCH"
 ok "Created: $LAUNCH"
 
-# ── Step 7: Write launch-windows.ps1 ─────────────────────────────────────────
-step "Writing launch-windows.ps1 (for cross-platform USB use)..."
-
+# -- Step 8: Write launch-windows.ps1 to USB root (for cross-platform) ---------
+step "Writing launch-windows.ps1..."
 WIN_LAUNCH="$SCRIPT_DIR/launch-windows.ps1"
 cat > "$WIN_LAUNCH" << 'WINEOF'
-# =============================================================================
-# HERMES PORTABLE LAUNCHER — Windows
+# ==============================================================================
+# HERMES PORTABLE LAUNCHER -- Windows
+# NOTE: On Windows, runtimes also install to host (%LOCALAPPDATA%\hermes-usb\)
+#       to avoid exFAT symlink limitations. Run hermes-usb-build.ps1 first.
 # Usage: powershell -ExecutionPolicy Bypass -File .\launch-windows.ps1 [args]
-# =============================================================================
+# ==============================================================================
 param([Parameter(ValueFromRemainingArguments)][string[]]$HermesArgs)
 
-$DRIVE       = Split-Path -Parent $MyInvocation.MyCommand.Path
-$HERMES_HOME = "$DRIVE\hermes-portable"
-$HERMES_DATA = "$HERMES_HOME\data"
+$DRIVE    = Split-Path -Parent $MyInvocation.MyCommand.Path
+$USB_DATA = "$DRIVE\hermes-portable\data"
+$HOST_HERMES = "$env:LOCALAPPDATA\hermes-usb"
 
-$env:HERMES_HOME = $HERMES_HOME
-$env:HERMES_DATA = $HERMES_DATA
+if (-not (Test-Path $HOST_HERMES)) {
+    Write-Host "[XX] Host runtime not found: $HOST_HERMES" -ForegroundColor Red
+    Write-Host "[!!] Run hermes-usb-build.ps1 on this machine first." -ForegroundColor Yellow
+    exit 1
+}
+
+$env:HERMES_HOME = $HOST_HERMES
+$env:HERMES_DATA = $USB_DATA
 
 foreach ($p in @(
-    "$HERMES_HOME\hermes-agent\venv\Scripts",
-    "$HERMES_HOME\venv\Scripts",
-    "$HERMES_HOME\git\bin"
+    "$HOST_HERMES\hermes-agent\venv\Scripts",
+    "$HOST_HERMES\venv\Scripts",
+    "$HOST_HERMES\git\bin"
 )) { if (Test-Path $p) { $env:PATH = "$p;$env:PATH" } }
 
-Write-Host "[BSS] Hermes portable | Drive: $DRIVE" -ForegroundColor Cyan
-Write-Host "[BSS] HERMES_HOME: $HERMES_HOME"        -ForegroundColor DarkCyan
+Write-Host "[BSS] Hermes portable"               -ForegroundColor Cyan
+Write-Host "[BSS] Runtimes : $HOST_HERMES"       -ForegroundColor DarkCyan
+Write-Host "[BSS] Data     : $USB_DATA"          -ForegroundColor DarkCyan
+Write-Host ""
 
 if ($HermesArgs.Count -gt 0) { & hermes @HermesArgs } else { & hermes }
 WINEOF
-
-# Fix to CRLF for Windows
-sed -i 's/$/\r/' "$WIN_LAUNCH" 2>/dev/null || true
 ok "Created: $WIN_LAUNCH"
 
-# ── Step 8: Write README ──────────────────────────────────────────────────────
-step "Writing README..."
+# -- Step 9: Write per-machine bootstrap note ----------------------------------
+step "Writing BOOTSTRAP-NEW-MACHINE.txt..."
+cat > "$SCRIPT_DIR/BOOTSTRAP-NEW-MACHINE.txt" << BSEOF
+HERMES PORTABLE -- NEW MACHINE SETUP
+Bad Systems Syndicate / CRL
+================================================
+
+IMPORTANT: Because this USB is exFAT, Hermes runtimes (Python venv,
+Node.js) must be installed on each new host machine. Your DATA
+(sessions, memory, API keys) stays on this USB and is never touched.
+
+ON A NEW LINUX MACHINE:
+  1. Plug in USB
+  2. cd to USB mount point
+  3. chmod +x hermes-usb-build.sh
+  4. ./hermes-usb-build.sh
+     (installs runtimes to ~/.hermes-usb/ on host, ~600MB, once per machine)
+  5. ./launch-linux.sh
+
+ON A NEW WINDOWS MACHINE:
+  1. Plug in USB
+  2. Run hermes-usb-build.ps1 (installs to %LOCALAPPDATA%\hermes-usb\)
+  3. Run launch-windows.ps1
+
+YOUR DATA IS ALWAYS ON THE USB:
+  hermes-portable/data/.env       -- API keys
+  hermes-portable/data/sessions/  -- conversation history
+  hermes-portable/data/memory/    -- agent memory
+  hermes-portable/data/skills/    -- custom skills
+
+OPSEC: Encrypt this USB with VeraCrypt before event use.
+BSEOF
+ok "Created: $SCRIPT_DIR/BOOTSTRAP-NEW-MACHINE.txt"
+
+# -- Step 10: README -----------------------------------------------------------
+step "Writing README.txt..."
 cat > "$SCRIPT_DIR/README.txt" << READMEEOF
-HERMES PORTABLE — BAD SYSTEMS SYNDICATE / CRL
+HERMES PORTABLE -- BAD SYSTEMS SYNDICATE / CRL
 NousResearch hermes-agent | MIT License
-Built: $(date '+%Y-%m-%d %H:%M')
-USB Root: $SCRIPT_DIR
-════════════════════════════════════════════════
+Built: $(date '+%Y-%m-%d %H:%M') on $(hostname)
+================================================
 
-FIRST-TIME SETUP:
-1. Edit hermes-portable/data/.env — add your API key(s)
-2. ./launch-linux.sh model     (configure LLM provider)
-3. ./launch-linux.sh doctor    (verify install)
-4. ./launch-linux.sh           (start chatting)
-
-LINUX USE:
+DAILY USE (this machine):
   ./launch-linux.sh
   ./launch-linux.sh model
   ./launch-linux.sh doctor
-  ./launch-linux.sh gateway setup
 
-WINDOWS USE:
-  powershell -ExecutionPolicy Bypass -File launch-windows.ps1
-  powershell -ExecutionPolicy Bypass -File launch-windows.ps1 model
+NEW MACHINE: See BOOTSTRAP-NEW-MACHINE.txt
 
-OPSEC REMINDER:
-  hermes-portable/data/.env contains raw API keys (chmod 600 set).
-  hermes-portable/data/sessions/ contains full chat history.
-  ENCRYPT THIS DRIVE with VeraCrypt before field/event use.
-  Do NOT store production keys on unencrypted portable drives.
-
-HERMES COMMANDS:
-  hermes           — Interactive chat (TUI)
-  hermes model     — Switch/configure LLM provider
-  hermes doctor    — Diagnose installation issues
-  hermes tools     — Configure enabled tools
-  hermes gateway   — Set up Telegram/Discord/Slack
-  hermes config    — View/set config values
-  hermes update    — Update to latest version
-
-DOCS:
-  https://hermes-agent.nousresearch.com/docs
-  https://github.com/NousResearch/hermes-agent
+OPSEC: Encrypt with VeraCrypt before event use.
+Docs: https://hermes-agent.nousresearch.com/docs
 READMEEOF
-ok "Created: $SCRIPT_DIR/README.txt"
+ok "Created: README.txt"
 
-# ── Step 9: Post-install health check ────────────────────────────────────────
-step "Running post-install check..."
-
+# -- Step 11: Health check -----------------------------------------------------
+step "Post-install health check..."
 export PATH="$HOME/.local/bin:$PATH"
-
 if command -v hermes &>/dev/null; then
-    ok "hermes version: $(hermes --version 2>&1 || echo 'unknown')"
+    ok "hermes: $(hermes --version 2>&1 || echo 'installed')"
 else
-    warn "hermes not yet in PATH for this shell — open new terminal and use launch-linux.sh"
+    warn "hermes not in PATH yet -- open new terminal and run ./launch-linux.sh"
 fi
 
 echo -e "${GREEN}
-════════════════════════════════════════════════
+================================================
   BUILD COMPLETE
-════════════════════════════════════════════════
+================================================
+  Runtimes : $HOST_HERMES  (host)
+  Data     : $USB_DATA  (USB)
 
   NEXT STEPS:
-  1. Edit hermes-portable/data/.env — add your API key
-  2. Open a new terminal
-  3. cd to USB mount and: ./launch-linux.sh model
+  1. nano hermes-portable/data/.env -- add API key
+  2. Open new terminal
+  3. ./launch-linux.sh model
   4. ./launch-linux.sh doctor
   5. ./launch-linux.sh
 
-  OPSEC: Encrypt this drive with VeraCrypt before field use.
-  Docs  : https://hermes-agent.nousresearch.com/docs
-════════════════════════════════════════════════
+  NEW MACHINE: run hermes-usb-build.sh again on it
+  OPSEC: Encrypt USB with VeraCrypt before events
+  Docs: https://hermes-agent.nousresearch.com/docs
+================================================
 ${NC}"
